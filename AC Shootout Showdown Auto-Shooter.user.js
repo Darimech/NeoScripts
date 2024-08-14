@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AC Shootout Showdown Auto-Shooter
 // @namespace    Darimech
-// @version      2024-08-14
+// @version      2024-08-14-patch1
 // @description  Automatically plays Shootout Showdown for the Neopets Altador Cup.
 // @author       Darimech
 // @match        https://www.neopets.com/altador/colosseum/ctp.phtml?game_id=1400*
@@ -95,13 +95,12 @@ async function tick() {
   const currentState = (await detectGameState()) ?? "unknownState";
   debug("Current state:", currentState);
 
-  await (actions[currentState] ?? actions.unknownState)();
-
-  debug("Finished action for state", currentState);
-  debug("Waiting for next tick...");
-  await sleepAbout(1000);
-
-  return currentState;
+  return {
+    actionPromise: (actions[currentState] ?? actions.unknownState)().then(() => {
+      debug("Finished action for state", currentState);
+    }),
+    currentState
+  };
 }
 
 function handleStateChange(prevState, nextState) {
@@ -221,8 +220,8 @@ async function sendScore() {
     remainingTries > 0 &&
     document.querySelector("#resultPopup").checkVisibility()
   ) {
-    remainignTries -= 1;
-    if (remainignTries === 0) {
+    remainingTries -= 1;
+    if (remainingTries === 0) {
       log("Failed to dismiss popup");
       stopAutoShooter();
       return;
@@ -242,11 +241,13 @@ async function runAutoShooter() {
   let prevState;
   try {
     while (isRunning) {
-      debug("tick");
-      const nextState = await tick();
-      await handleStateChange(prevState, nextState);
-      prevState = nextState;
-      debug("tick finished");
+      debug("tick starting");
+      const { currentState, actionPromise } = await tick();
+      await handleStateChange(prevState, currentState);
+      await actionPromise;
+      prevState = currentState;
+      debug("Waiting before next tick...");
+      await sleepAbout(1000);
     }
     debug("done running");
   } catch (e) {
@@ -356,12 +357,19 @@ async function isScoreScreen(color) {
 }
 
 async function shootBall() {
-  debug("Pressing space to shoot ball");
+  log("Shooting ball");
   await pressSpaceKey();
   const goalRightCorner = new DOMRect(405, 400, 15, 40);
   const goalLeftCorner = new DOMRect(200, 400, 15, 40);
-  const chosenCorner = [null, goalRightCorner, goalLeftCorner][
-    Math.floor(Math.random() * 3)
+  const chosenCorner = [
+    null,
+    goalRightCorner,
+    goalRightCorner,
+    goalRightCorner,
+    goalLeftCorner,
+    goalLeftCorner,
+  ][
+    Math.floor(Math.random() * 6)
   ];
 
   if (chosenCorner) {
@@ -464,8 +472,8 @@ async function simulateKeyPress(
 function simulateMouseEvent(targetElement, type, x, y) {
   var rect = targetElement.getBoundingClientRect();
   // accounts for scaling if the game is fullscreen or scaled otherwise
-  const clientX = (targetElement.clientWidth / rect.width) * x;
-  const clientY = (targetElement.clientHeight / rect.height) * y;
+  const clientX = (rect.width / targetElement.width) * x;
+  const clientY = (rect.height / targetElement.height) * y;
 
   var event = new MouseEvent(type, {
     clientX: rect.left + clientX,
