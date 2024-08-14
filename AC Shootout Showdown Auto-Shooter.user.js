@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AC Shootout Showdown Auto-Shooter
 // @namespace    Darimech
-// @version      2024-08-06
+// @version      2024-08-14
 // @description  Automatically plays Shootout Showdown for the Neopets Altador Cup.
 // @author       Darimech
 // @match        https://www.neopets.com/altador/colosseum/ctp.phtml?game_id=1400*
@@ -11,6 +11,7 @@
 // ==/UserScript==
 
 let isRunning = false;
+let currentGameStartedAt = null;
 
 const TEST_MODE_DONT_SEND_SCORE = false;
 let DEBUG = false;
@@ -78,9 +79,12 @@ async function tick() {
       await clickStartGameButton();
     },
     async [GameState.playing]() {
-      // todo: Optionally use the arrow keys before pressing space to act like we try to aim the shot
-      debug("Shooting");
-      await pressSpaceKey();
+      if (await checkIfCanEndEarly()) {
+        await clickEndGameButton();
+        return;
+      }
+
+      await shootBall();
     },
     async [GameState.onScoreScreen]() {
       await sendScore();
@@ -96,6 +100,26 @@ async function tick() {
   debug("Finished action for state", currentState);
   debug("Waiting for next tick...");
   await sleepAbout(1000);
+
+  return currentState;
+}
+
+function handleStateChange(prevState, nextState) {
+  if (prevState === nextState) return;
+
+  debug("State change:", prevState, "->", nextState);
+
+  switch (nextState) {
+    case GameState.onTitleScreen:
+    case GameState.onScoreScreen:
+      currentGameStartedAt = null;
+      break;
+    case GameState.playing:
+      currentGameStartedAt = Date.now();
+      break;
+  }
+
+  return Promise.resolve();
 }
 
 function detectFailedCaptcha() {
@@ -215,10 +239,13 @@ async function runAutoShooter() {
   isRunning = true;
   setButtonText("Stop Auto-Shooting");
 
+  let prevState;
   try {
     while (isRunning) {
       debug("tick");
-      await tick();
+      const nextState = await tick();
+      await handleStateChange(prevState, nextState);
+      prevState = nextState;
       debug("tick finished");
     }
     debug("done running");
@@ -234,11 +261,48 @@ function stopAutoShooter() {
   setButtonText("Start Auto-Shooting");
 }
 
+async function checkIfCanEndEarly() {
+  if (!(await isPlayScreen())) return false;
+  if (!currentGameStartedAt) return false;
+
+  if (Date.now() - currentGameStartedAt < 10000) {
+    debug("Game has been running for less than 10 seconds, can't end yet");
+    return false;
+  }
+
+  const canvas = getGameCanvas();
+
+  let hasScore = false;
+  await Promise.all(
+    [
+      { x: 265.0879928354117, y: 209.347060546875 }, // score is 1, 4, 2
+      { x: 265.65476641252815, y: 207.98144855233554 }, // score is 1, 3
+    ].map((p) =>
+      getPixelColor(canvas, p).then((color) => {
+        if (color === "#000000") hasScore = true;
+      })
+    )
+  );
+
+  if (!hasScore) {
+    debug("No score detected, can't end early");
+    return false;
+  }
+  return true;
+}
+
 async function clickStartGameButton() {
   if (!(await isTitleScreen())) return;
   const startButtonPosition = new DOMRect(390, 520, 255, 75);
   log("Starting game");
   await simulateCanvasClick(getGameCanvas(), startButtonPosition);
+}
+
+async function clickEndGameButton() {
+  if (!(await isPlayScreen())) return;
+  const endGameButtonPosition = new DOMRect(390, 24, 235, 70);
+  log("Ending game early");
+  await simulateCanvasClick(getGameCanvas(), endGameButtonPosition);
 }
 
 async function clickSendScoreButton() {
@@ -254,7 +318,6 @@ async function clickRestartGameButton() {
   log("Restarting game");
   await simulateCanvasClick(getGameCanvas(), sendScorePosition);
 }
-
 
 async function detectGameState(color) {
   const pixelColor = await getPixelColor(getGameCanvas());
@@ -290,6 +353,22 @@ async function isScoreScreen(color) {
   return PIXEL_COLORS.scoreScreen.includes(
     color ?? (await getPixelColor(getGameCanvas()))
   );
+}
+
+async function shootBall() {
+  log("Shooting ball");
+  await pressSpaceKey();
+  const goalRightCorner = new DOMRect(405, 400, 15, 40);
+  const goalLeftCorner = new DOMRect(200, 400, 15, 40);
+  const chosenCorner = [null, goalRightCorner, goalLeftCorner][
+    Math.floor(Math.random() * 3)
+  ];
+
+  if (chosenCorner) {
+    const side = chosenCorner === goalRightCorner ? "right" : "left";
+    debug("Aiming next shot at", side, "side of goal");
+    await simulateCanvasClick(getGameCanvas(), chosenCorner);
+  }
 }
 
 function pressSpaceKey() {
@@ -383,11 +462,11 @@ async function simulateKeyPress(
  * @param {number} y The y position to simulate the event at.
  */
 function simulateMouseEvent(targetElement, type, x, y) {
-  // accounts for scaling if the game is fullscreen or scaled otherwise
-  const clientX = (targetElement.clientWidth / targetElement.width) * x;
-  const clientY = (targetElement.clientHeight / targetElement.height) * y;
-
   var rect = targetElement.getBoundingClientRect();
+  // accounts for scaling if the game is fullscreen or scaled otherwise
+  const clientX = (targetElement.clientWidth / rect.width) * x;
+  const clientY = (targetElement.clientHeight / rect.height) * y;
+
   var event = new MouseEvent(type, {
     clientX: rect.left + clientX,
     clientY: rect.top + clientY,
