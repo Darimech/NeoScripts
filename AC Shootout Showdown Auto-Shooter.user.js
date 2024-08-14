@@ -356,7 +356,7 @@ async function isScoreScreen(color) {
 }
 
 async function shootBall() {
-  log("Shooting ball");
+  debug("Pressing space to shoot ball");
   await pressSpaceKey();
   const goalRightCorner = new DOMRect(405, 400, 15, 40);
   const goalLeftCorner = new DOMRect(200, 400, 15, 40);
