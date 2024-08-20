@@ -29,8 +29,9 @@ function main() {
       button.click();
     }
   });
-  input.addEventListener("focus", (event) => {
-    event.target.select();
+ 
+  input.addEventListener("input", () => {
+    input.value = input.value.slice(-2)
   });
 
   button.addEventListener("click", () => {
@@ -57,7 +58,7 @@ function main() {
   container.append(document.createElement("br"));
   container.append(document.createElement("br"));
   container.append(
-    "Hold shift while typing the keys before pressing 'start mashing'"
+    "Hold shift while typing the keys before pressing 'start mashing' (or pressing enter)"
   );
   container.append(document.createElement("br"));
   container.append(document.createElement("br"));
