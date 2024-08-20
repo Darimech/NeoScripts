@@ -1,0 +1,217 @@
+// ==UserScript==
+// @name         AC Make Some Noise Automasher
+// @namespace    Darimech
+// @version      2024-08-20
+// @description  Automatically mashes keys in the Make Some Noise game in the Altador Cup on Neopets.
+// @author       Darimech
+// @match        https://www.neopets.com/altador/colosseum/ctp.phtml?game_id=1399*
+// @icon         https://bookofages.jellyneo.net/assets/imgs/characters/lg/132.png
+// @grant        unsafeWindow
+// @noframes
+// ==/UserScript==
+
+let DEBUG = false;
+const DELAY = 30;
+const NORMALIZATION = 10; // how many passes to average random ranges over
+
+main();
+
+function main() {
+  const masher = makeKeyMasher();
+  debug(masher);
+  const input = document.createElement("input");
+  input.type = "text";
+
+  const button = document.createElement("button");
+  button.textContent = "Start Mashing";
+  button.addEventListener("click", () => {
+    if (masher.isRunning()) {
+      masher.stop();
+      return;
+    }
+    const letters = input.value;
+    if (letters.length === 0) {
+      alert("Please enter some letters to mash.");
+      return;
+    }
+    masher.start(letters).then((timesPressed) => {
+      debug(`Pressed keys ${timesPressed} times.`);
+      button.textContent = "Start Mashing";
+    });
+    button.textContent = "Stop Mashing";
+  });
+
+  const container = document.createElement("div");
+  container.style.padding = "10px";
+
+  container.append(input, " ", button);
+  container.append(document.createElement("br"));
+  container.append(document.createElement("br"));
+  container.append(
+    "Hold shift while typing the keys before pressing 'start mashing'"
+  );
+
+  document.querySelector(".altadorCupCTP-frame").append(container);
+}
+
+function makeKeyMasher() {
+  let isRunning = false;
+
+  return Object.freeze({
+    /**
+     * @param {string} letters
+     */
+    start: async (letters) => {
+      debug("Starting masher with letters:", letters);
+      let currentIndex = 0;
+      isRunning = true;
+      while (isRunning) {
+        const letter = letters.charAt(currentIndex % letters.length);
+        debug("Pressing letter:", letter, currentIndex % letters.length);
+        await simulateLetterPress(letter);
+        await sleepAbout(DELAY);
+        currentIndex += 1;
+      }
+      return currentIndex;
+    },
+    stop: () => {
+      debug("Stopping masher.");
+      isRunning = false;
+    },
+    isRunning: () => isRunning,
+  });
+}
+
+/// Event simulation ///
+
+function simulateLetterPress(letter) {
+  return simulateKeyPress(document, {
+    key: letter,
+    code: `Key${letter.toUpperCase()}`,
+    keyCode: letter.toUpperCase().charCodeAt(0),
+    which: letter.toUpperCase().charCodeAt(0),
+    bubbles: true,
+  });
+}
+
+/**
+ * Presses and releases a key with a delay.
+ * @param {HTMLElement} targetElement The element to simulate the event on.
+ * @param {KeyboardEventInit} eventInit The event to simulate.
+ */
+async function simulateKeyPress(
+  targetElement,
+  eventInit,
+  approximatePressTime = DELAY
+) {
+  debug("Simulating key press:", eventInit.key);
+  targetElement.dispatchEvent(new KeyboardEvent("keydown", eventInit));
+
+  await sleepAbout(approximatePressTime);
+
+  targetElement.dispatchEvent(new KeyboardEvent("keyup", eventInit));
+}
+
+/**
+ * Simulates a mouse event.
+ * @param {HTMLElement} targetElement The element to simulate the event on.
+ * @param {"mousedown" | "mouseup"} type The type of event to simulate.
+ * @param {number} x The x position to simulate the event at.
+ * @param {number} y The y position to simulate the event at.
+ */
+function simulateMouseEvent(targetElement, type, x, y) {
+  var rect = targetElement.getBoundingClientRect();
+  // accounts for scaling if the game is fullscreen or scaled otherwise
+  const clientX = (rect.width / targetElement.width) * x;
+  const clientY = (rect.height / targetElement.height) * y;
+
+  var event = new MouseEvent(type, {
+    clientX: rect.left + clientX,
+    clientY: rect.top + clientY,
+    bubbles: true,
+    cancelable: true,
+    view: unsafeWindow,
+  });
+  targetElement.dispatchEvent(event);
+}
+
+/// Utility functions ///
+
+/**
+ * @param {Point} point
+ * @param {Rect} bounds
+ * @returns
+ */
+function keepInBounds(point, bounds) {
+  return {
+    x: Math.min(Math.max(point.x, bounds.x), bounds.x + bounds.width),
+    y: Math.min(Math.max(point.y, bounds.y), bounds.y + bounds.height),
+  };
+}
+
+/**
+ * Generates a random number between min and max using a gaussian distribution.
+ * @param {number} min The minimum value to generate (inclusive).
+ * @param {number} max The maximum value to generate (inclusive).
+ * @param {number?} passes The number of random numbers to generate and average.
+ * @returns {number} A random number between min and max (inclusive).
+ */
+function gaussianRandom(min, max, passes = NORMALIZATION) {
+  let total = 0;
+  for (let i = 0; i < passes; i++) {
+    total += Math.random();
+  }
+  return Math.floor(min + (total / passes) * (max - min) + 0.5);
+}
+
+/**
+ * @param {Rect} bounds
+ * @returns {Point}
+ */
+function randomPosition(bounds) {
+  return {
+    x: gaussianRandom(bounds.x, bounds.x + bounds.width),
+    y: gaussianRandom(bounds.y, bounds.y + bounds.height),
+  };
+}
+
+/**
+ * Generates a random number around a given amount.
+ * @param {number} amount The amount to generate around.
+ * @param {number} percentRange The percentage range to generate around the amount, e.g. 0.5 for a range of 50% above or below the amount.
+ * @returns {number} A random number around the given amount.
+ */
+function about(amount, percentRange = 0.5) {
+  return gaussianRandom(
+    amount * (1 - percentRange),
+    amount * (1 + percentRange)
+  );
+}
+
+/**
+ * @param {number} ms How long to sleep in milliseconds.
+ * @returns A promise that resolves after the given time.
+ */
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Sleeps for a random amount of time approximately about the given amount.
+ * @param {number} ms How long to sleep in milliseconds.
+ * @returns A promise that resolves after the given time.
+ */
+function sleepAbout(ms) {
+  return sleep(about(ms));
+}
+
+function log(...messages) {
+  console.log(...messages);
+}
+
+function debug(...messages) {
+  if (DEBUG) console.debug(`DEBUG ${new Date().toISOString()}:`, ...messages);
+}
+
+unsafeWindow.AC_MSN_enableDebug = () => (DEBUG = true);
+unsafeWindow.AC_MSN_disableDebug = () => (DEBUG = false);
