@@ -12,7 +12,6 @@
 
 let DEBUG = false;
 let DELAY = 30;
-let NORMALIZATION = 10; // how many passes to average random ranges over
 
 main();
 
@@ -29,9 +28,9 @@ function main() {
       button.click();
     }
   });
- 
+
   input.addEventListener("input", () => {
-    input.value = input.value.slice(-2)
+    input.value = input.value.slice(-2);
   });
 
   button.addEventListener("click", () => {
@@ -63,15 +62,6 @@ function main() {
   container.append(document.createElement("br"));
   container.append(document.createElement("br"));
 
-  const normalizationInput = document.createElement("input");
-  normalizationInput.type = "number";
-  normalizationInput.value = NORMALIZATION;
-  normalizationInput.addEventListener("change", () => {
-    NORMALIZATION = Number(normalizationInput.value);
-  });
-  container.append(" Normalization: ", normalizationInput);
-  container.append(document.createElement("br"));
-
   const delayInput = document.createElement("input");
   delayInput.type = "number";
   delayInput.value = DELAY;
@@ -85,6 +75,7 @@ function main() {
 
 function makeKeyMasher() {
   let isRunning = false;
+  let lastScoreScreenCheckAt = Date.now();
 
   return Object.freeze({
     /**
@@ -94,20 +85,29 @@ function makeKeyMasher() {
       debug("Starting masher with letters:", letters);
       let currentIndex = 0;
       isRunning = true;
+
+      const letterEvents = letters.split("").map(getLetterEvent);
+
       while (isRunning) {
         if (await isScoreScreen()) {
           debug("Score screen detected, stopping masher.");
           await sendScore();
           break;
         }
-        const letter = letters.charAt(currentIndex % letters.length);
-        debug("Pressing letter:", letter, currentIndex % letters.length);
-        await simulateLetterPress(letter);
-        await sleepAbout(DELAY);
+        await simulateKeyPress(
+          document,
+          letterEvents[currentIndex % letters.length]
+        );
+        await sleep(DELAY);
         currentIndex += 1;
       }
       isRunning = false;
       return currentIndex;
+    },
+    checkScoreScreen: async () => {
+      if (Date.now() - lastScoreScreenCheckAt < 1000) return false;
+      lastScoreScreenCheckAt = Date.now();
+      return isScoreScreen();
     },
     stop: () => {
       debug("Stopping masher.");
@@ -121,17 +121,32 @@ async function sendScore() {
   const isScoreSent = () =>
     document.getElementById("resultTitle").innerText.includes("Success");
 
+  const isScoreError = () =>
+    document.getElementById("resultTitle").innerText.includes("Error");
+
   await clickSendScoreButton();
 
   while (!isScoreSent()) {
     await sleep(100);
+    if (isScoreError()) {
+      debug("Error sending score");
+      return;
+    }
   }
 
   document.querySelector("#btnDismiss").click();
+
+  await sleep(100);
+  await clickStartGameButton();
+}
+
+async function clickStartGameButton() {
+  const startGamePosition = new DOMRect(7, 500, 200, 80);
+  debug("Clicking send score button.");
+  await simulateCanvasClick(getGameCanvas(), startGamePosition);
 }
 
 async function clickSendScoreButton() {
-  if (!(await isScoreScreen())) return;
   const sendScorePosition = new DOMRect(376, 380, 200, 80);
   debug("Clicking send score button.");
   await simulateCanvasClick(getGameCanvas(), sendScorePosition);
@@ -197,14 +212,16 @@ async function getPixelColor(canvas, point = { x: 0, y: 0 }) {
 
 /// Event simulation ///
 
-function simulateLetterPress(letter) {
-  return simulateKeyPress(document, {
+function getLetterEvent(letter) {
+  letter = letter.toUpperCase();
+  const charCode = letter.charCodeAt(0);
+  return {
     key: letter,
-    code: `Key${letter.toUpperCase()}`,
-    keyCode: letter.toUpperCase().charCodeAt(0),
-    which: letter.toUpperCase().charCodeAt(0),
+    code: `Key${letter}`,
+    keyCode: charCode,
+    which: charCode,
     bubbles: true,
-  });
+  };
 }
 
 /**
@@ -212,15 +229,10 @@ function simulateLetterPress(letter) {
  * @param {HTMLElement} targetElement The element to simulate the event on.
  * @param {KeyboardEventInit} eventInit The event to simulate.
  */
-async function simulateKeyPress(
-  targetElement,
-  eventInit,
-  approximatePressTime = DELAY
-) {
-  debug("Simulating key press:", eventInit.key);
+async function simulateKeyPress(targetElement, eventInit) {
   targetElement.dispatchEvent(new KeyboardEvent("keydown", eventInit));
 
-  await sleepAbout(approximatePressTime);
+  await sleep(DELAY);
 
   targetElement.dispatchEvent(new KeyboardEvent("keyup", eventInit));
 }
@@ -262,8 +274,8 @@ async function simulateCanvasClick(targetElement, clickBounds) {
     ? mouseDownPosition
     : keepInBounds(
         {
-          x: mouseDownPosition.x + gaussianRandom(-10, 10),
-          y: mouseDownPosition.y + gaussianRandom(-10, 10),
+          x: mouseDownPosition.x + random(-10, 10),
+          y: mouseDownPosition.y + random(-10, 10),
         },
         clickBounds
       );
@@ -277,7 +289,7 @@ async function simulateCanvasClick(targetElement, clickBounds) {
     mouseDownPosition.y
   );
 
-  await sleepAbout(clickDuration);
+  await sleep(clickDuration);
 
   simulateMouseEvent(
     targetElement,
@@ -301,19 +313,9 @@ function keepInBounds(point, bounds) {
   };
 }
 
-/**
- * Generates a random number between min and max using a gaussian distribution.
- * @param {number} min The minimum value to generate (inclusive).
- * @param {number} max The maximum value to generate (inclusive).
- * @param {number?} passes The number of random numbers to generate and average.
- * @returns {number} A random number between min and max (inclusive).
- */
-function gaussianRandom(min, max, passes = NORMALIZATION) {
-  let total = 0;
-  for (let i = 0; i < passes; i++) {
-    total += Math.random();
-  }
-  return Math.floor(min + (total / passes) * (max - min) + 0.5);
+function random(min, max) {
+  let total = Math.random();
+  return Math.floor(min + total * (max - min));
 }
 
 /**
@@ -322,22 +324,9 @@ function gaussianRandom(min, max, passes = NORMALIZATION) {
  */
 function randomPosition(bounds) {
   return {
-    x: gaussianRandom(bounds.x, bounds.x + bounds.width),
-    y: gaussianRandom(bounds.y, bounds.y + bounds.height),
+    x: random(bounds.x, bounds.x + bounds.width),
+    y: random(bounds.y, bounds.y + bounds.height),
   };
-}
-
-/**
- * Generates a random number around a given amount.
- * @param {number} amount The amount to generate around.
- * @param {number} percentRange The percentage range to generate around the amount, e.g. 0.5 for a range of 50% above or below the amount.
- * @returns {number} A random number around the given amount.
- */
-function about(amount, percentRange = 0.5) {
-  return gaussianRandom(
-    amount * (1 - percentRange),
-    amount * (1 + percentRange)
-  );
 }
 
 /**
@@ -346,19 +335,6 @@ function about(amount, percentRange = 0.5) {
  */
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/**
- * Sleeps for a random amount of time approximately about the given amount.
- * @param {number} ms How long to sleep in milliseconds.
- * @returns A promise that resolves after the given time.
- */
-function sleepAbout(ms) {
-  return sleep(about(ms));
-}
-
-function log(...messages) {
-  console.log(...messages);
 }
 
 function debug(...messages) {
