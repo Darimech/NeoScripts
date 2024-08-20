@@ -11,19 +11,28 @@
 // ==/UserScript==
 
 let DEBUG = false;
-const DELAY = 30;
-const NORMALIZATION = 10; // how many passes to average random ranges over
+let DELAY = 30;
+let NORMALIZATION = 10; // how many passes to average random ranges over
 
 main();
 
 function main() {
   const masher = makeKeyMasher();
-  debug(masher);
+
   const input = document.createElement("input");
   input.type = "text";
-
   const button = document.createElement("button");
   button.textContent = "Start Mashing";
+
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      button.click();
+    }
+  });
+  input.addEventListener("focus", (event) => {
+    event.target.select();
+  });
+
   button.addEventListener("click", () => {
     if (masher.isRunning()) {
       masher.stop();
@@ -50,6 +59,25 @@ function main() {
   container.append(
     "Hold shift while typing the keys before pressing 'start mashing'"
   );
+  container.append(document.createElement("br"));
+  container.append(document.createElement("br"));
+
+  const normalizationInput = document.createElement("input");
+  normalizationInput.type = "number";
+  normalizationInput.value = NORMALIZATION;
+  normalizationInput.addEventListener("change", () => {
+    NORMALIZATION = Number(normalizationInput.value);
+  });
+  container.append(" Normalization: ", normalizationInput);
+  container.append(document.createElement("br"));
+
+  const delayInput = document.createElement("input");
+  delayInput.type = "number";
+  delayInput.value = DELAY;
+  delayInput.addEventListener("change", () => {
+    DELAY = Number(delayInput.value);
+  });
+  container.append(" Delay (ms): ", delayInput);
 
   document.querySelector(".altadorCupCTP-frame").append(container);
 }
@@ -66,12 +94,18 @@ function makeKeyMasher() {
       let currentIndex = 0;
       isRunning = true;
       while (isRunning) {
+        if (await isScoreScreen()) {
+          debug("Score screen detected, stopping masher.");
+          await sendScore();
+          break;
+        }
         const letter = letters.charAt(currentIndex % letters.length);
         debug("Pressing letter:", letter, currentIndex % letters.length);
         await simulateLetterPress(letter);
         await sleepAbout(DELAY);
         currentIndex += 1;
       }
+      isRunning = false;
       return currentIndex;
     },
     stop: () => {
@@ -80,6 +114,84 @@ function makeKeyMasher() {
     },
     isRunning: () => isRunning,
   });
+}
+
+async function sendScore() {
+  const isScoreSent = () =>
+    document.getElementById("resultTitle").innerText.includes("Success");
+
+  await clickSendScoreButton();
+
+  while (!isScoreSent()) {
+    await sleep(100);
+  }
+
+  document.querySelector("#btnDismiss").click();
+}
+
+async function clickSendScoreButton() {
+  if (!(await isScoreScreen())) return;
+  const sendScorePosition = new DOMRect(376, 380, 200, 80);
+  debug("Clicking send score button.");
+  await simulateCanvasClick(getGameCanvas(), sendScorePosition);
+}
+
+async function isScoreScreen() {
+  const pixel = await getPixelColor(getGameCanvas());
+  return pixel === "#cfcfcf";
+}
+
+/// Game canvas ///
+
+/**
+ * @returns {HTMLCanvasElement} The altador cup game canvas element.
+ */
+function getGameCanvas() {
+  return document.querySelector(".altadorCupCTP-Game canvas");
+}
+
+/**
+ * @typedef {{ x: number, y: number, width: number, height: number }} Rect
+ * @typedef {{ x: number, y: number }} Point
+ *
+ * Reads the image data from the game canvas.
+ * @param {Rect | Point} rect A rectangle or point indicating the area to read the pixel(s) from.
+ * @returns
+ */
+function readPixelsInRect(canvas, { x, y, width = 1, height = 1 }) {
+  const gl = canvas.getContext("webgl2") || canvas.getContext("webgl");
+
+  const pixels = new Uint8Array(width * height * 4);
+
+  // invert the y axis because the GL axis is flipped compared to how we deal with coordinates in web
+  const invertedY = gl.drawingBufferHeight - y - height;
+
+  // console.debug("Reading pixels at", x, invertedY, width, height);
+
+  return new Promise((resolve) =>
+    requestAnimationFrame(() => {
+      gl.readPixels(
+        x,
+        invertedY,
+        width,
+        height,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        pixels
+      );
+      resolve(pixels);
+    })
+  );
+}
+
+async function getPixelColor(canvas, point = { x: 0, y: 0 }) {
+  const pixel = await readPixelsInRect(canvas, point);
+
+  const r = pixel[0].toString(16).padStart(2, "0");
+  const g = pixel[1].toString(16).padStart(2, "0");
+  const b = pixel[2].toString(16).padStart(2, "0");
+
+  return `#${r}${g}${b}`;
 }
 
 /// Event simulation ///
@@ -133,6 +245,45 @@ function simulateMouseEvent(targetElement, type, x, y) {
     view: unsafeWindow,
   });
   targetElement.dispatchEvent(event);
+}
+
+/**
+ * Simulates a click on a target element at a random position within the bounds.
+ * This attempts to simulate a more human-like click by moving the mouse around a bit sometimes and clicking only approximately in the middle of the click bounds.
+ * @param {HTMLElement} targetElement The element to click on.
+ * @param {Rect} clickBounds The bounds to click within.
+ */
+async function simulateCanvasClick(targetElement, clickBounds) {
+  const mouseDownPosition = randomPosition(clickBounds);
+
+  const isStable = Math.random() < 0.8;
+  const mouseUpPosition = isStable
+    ? mouseDownPosition
+    : keepInBounds(
+        {
+          x: mouseDownPosition.x + gaussianRandom(-10, 10),
+          y: mouseDownPosition.y + gaussianRandom(-10, 10),
+        },
+        clickBounds
+      );
+
+  const clickDuration = Math.random() < 0.2 ? 300 : 100;
+
+  simulateMouseEvent(
+    targetElement,
+    "mousedown",
+    mouseDownPosition.x,
+    mouseDownPosition.y
+  );
+
+  await sleepAbout(clickDuration);
+
+  simulateMouseEvent(
+    targetElement,
+    "mouseup",
+    mouseUpPosition.x,
+    mouseUpPosition.y
+  );
 }
 
 /// Utility functions ///
